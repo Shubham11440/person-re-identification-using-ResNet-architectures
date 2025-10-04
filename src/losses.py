@@ -1,82 +1,33 @@
-"""
-Loss functions for person re-identification.
-"""
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-
-class TripletLoss(nn.Module):
-    """Triplet loss for person re-identification."""
+class CrossEntropyLabelSmooth(nn.Module):
+    """Cross entropy loss with label smoothing regularizer.
     
-    def __init__(self, margin=0.3):
-        super(TripletLoss, self).__init__()
-        self.margin = margin
-        
-    def forward(self, anchor, positive, negative):
+    Reference:
+    Szegedy et al. Rethinking the Inception Architecture for Computer Vision. CVPR 2016.
+    """
+    def __init__(self, num_classes, epsilon=0.1):
+        super(CrossEntropyLabelSmooth, self).__init__()
+        self.num_classes = num_classes
+        self.epsilon = epsilon
+        self.logsoftmax = nn.LogSoftmax(dim=1)
+
+    def forward(self, inputs, targets):
         """
         Args:
-            anchor: Feature vectors of anchor samples
-            positive: Feature vectors of positive samples  
-            negative: Feature vectors of negative samples
+            inputs: prediction matrix (before softmax) with shape (batch_size, num_classes)
+            targets: ground truth labels with shape (batch_size)
         """
-        pos_dist = F.pairwise_distance(anchor, positive, p=2)
-        neg_dist = F.pairwise_distance(anchor, negative, p=2)
-        
-        loss = F.relu(pos_dist - neg_dist + self.margin)
-        return loss.mean()
+        log_probs = self.logsoftmax(inputs)
+        targets = torch.zeros_like(log_probs).scatter_(1, targets.unsqueeze(1), 1)
+        targets = (1 - self.epsilon) * targets + self.epsilon / self.num_classes
+        loss = (-targets * log_probs).mean(0).sum()
+        return loss
 
-
-class CrossEntropyLoss(nn.Module):
-    """Cross-entropy loss for classification."""
-    
-    def __init__(self, label_smoothing=0.1):
-        super(CrossEntropyLoss, self).__init__()
-        self.label_smoothing = label_smoothing
-        
-    def forward(self, logits, targets):
-        """
-        Args:
-            logits: Model predictions
-            targets: Ground truth labels
-        """
-        return F.cross_entropy(logits, targets, 
-                             label_smoothing=self.label_smoothing)
-
-
-class CombinedLoss(nn.Module):
-    """Combined loss function for person re-identification."""
-    
-    def __init__(self, triplet_weight=1.0, ce_weight=1.0, margin=0.3, 
-                 label_smoothing=0.1):
-        super(CombinedLoss, self).__init__()
-        self.triplet_weight = triplet_weight
-        self.ce_weight = ce_weight
-        
-        self.triplet_loss = TripletLoss(margin=margin)
-        self.ce_loss = CrossEntropyLoss(label_smoothing=label_smoothing)
-        
-    def forward(self, features, logits, targets, anchor_idx, pos_idx, neg_idx):
-        """
-        Args:
-            features: Feature vectors
-            logits: Classification logits
-            targets: Ground truth labels
-            anchor_idx: Indices of anchor samples
-            pos_idx: Indices of positive samples
-            neg_idx: Indices of negative samples
-        """
-        # Classification loss
-        ce_loss = self.ce_loss(logits, targets)
-        
-        # Triplet loss
-        anchor_features = features[anchor_idx]
-        pos_features = features[pos_idx]
-        neg_features = features[neg_idx]
-        triplet_loss = self.triplet_loss(anchor_features, pos_features, neg_features)
-        
-        total_loss = (self.ce_weight * ce_loss + 
-                     self.triplet_weight * triplet_loss)
-        
-        return total_loss, ce_loss, triplet_loss
+# We will use the standard CrossEntropyLabelSmooth for LSRO as it provides the core functionality
+# The paper's re-formulation (Eq 1) is a specific interpretation of label smoothing
+# applied in a part-based context. Using a well-established Label Smoothing implementation
+# is the standard way to realize this. When we apply this loss to each part's output,
+# we are effectively implementing the LSRO strategy.
